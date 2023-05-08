@@ -1,20 +1,44 @@
 package com.hmdp;
 
+import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.bean.copier.CopyOptions;
+import cn.hutool.core.lang.Assert;
+import cn.hutool.core.lang.UUID;
+import cn.hutool.core.thread.ThreadUtil;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import com.hmdp.dto.LoginFormDTO;
+import com.hmdp.dto.Result;
+import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Shop;
+import com.hmdp.entity.User;
+import com.hmdp.mapper.UserMapper;
+import com.hmdp.service.IUserService;
 import com.hmdp.service.impl.ShopServiceImpl;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisIdWorker;
+import lombok.Cleanup;
+import lombok.SneakyThrows;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers;
 
 import javax.annotation.Resource;
+import javax.servlet.http.HttpSession;
 
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
-import static com.hmdp.utils.RedisConstants.CACHE_SHOP_KEY;
+import static com.hmdp.utils.RedisConstants.*;
 
 @SpringBootTest
 class HmdpApplicationTests {
@@ -27,6 +51,9 @@ class HmdpApplicationTests {
 
     @Resource
     private RedisIdWorker redisIdWorker;
+
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
 
     @Test
     void contextLoads() {
@@ -59,5 +86,40 @@ class HmdpApplicationTests {
         long end = System.currentTimeMillis();
         System.out.println("time: " + (end - begin));
     }
+
+    @Resource
+    private IUserService userService;
+
+    @Resource
+    HttpSession session;
+    @Resource
+    private UserMapper userMapper;
+
+    LoginFormDTO loginFormDTO = new LoginFormDTO();
+
+    @Test
+    void testMultiLogin() throws IOException {
+        List<User> userList = userService.lambdaQuery().last("limit 1000").list();
+        for (User user : userList) {
+            String token = UUID.randomUUID().toString(true);
+            UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
+            Map<String, Object> userMap = BeanUtil.beanToMap(userDTO, new HashMap<>(),
+                    CopyOptions.create().ignoreNullValue()
+                            .setFieldValueEditor((fieldName, fieldValue) -> fieldValue.toString()));
+            String tokenKey = LOGIN_USER_KEY + token;
+            stringRedisTemplate.opsForHash().putAll(tokenKey, userMap);
+            stringRedisTemplate.expire(tokenKey, 30, TimeUnit.MINUTES);
+        }
+        Set<String> keys = stringRedisTemplate.keys(LOGIN_USER_KEY + "*");
+        @Cleanup FileWriter fileWriter = new FileWriter(System.getProperty("user.dir") + "\\tokens.txt");
+        @Cleanup BufferedWriter bufferedWriter = new BufferedWriter(fileWriter);
+        assert keys != null;
+        for (String key : keys) {
+            String token = key.substring(LOGIN_USER_KEY.length());
+            String text = token + "\n";
+            bufferedWriter.write(text);
+        }
+    }
+
 
 }
